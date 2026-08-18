@@ -81,20 +81,21 @@ jobs:
           fi
           
           echo "⬇️ 正在拉取 SuSFS 补丁分支: $SUSFS_BR..."
-          git clone --depth=1 -b "$SUSFS_BR" https://gitlab.com/simonpunk/susfs4kernel.git susfs4kernel || \
-          git clone --depth=1 https://gitlab.com/simonpunk/susfs4kernel.git susfs4kernel
+          # 精确克隆官方 susfs4ksu 源码
+          git clone --depth=1 -b "$SUSFS_BR" https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu || \
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
           
           # 拷贝 SuSFS 核心驱动文件
-          if [ -d "susfs4kernel/kernel_patches/fs" ]; then
-            cp -r susfs4kernel/kernel_patches/fs/* $KERNEL_SRC/fs/
+          if [ -d "susfs4ksu/kernel_patches/fs" ]; then
+            cp -r susfs4ksu/kernel_patches/fs/* $KERNEL_SRC/fs/
           fi
-          if [ -d "susfs4kernel/kernel_patches/include/linux" ]; then
-            cp -r susfs4kernel/kernel_patches/include/linux/* $KERNEL_SRC/include/linux/
+          if [ -d "susfs4ksu/kernel_patches/include/linux" ]; then
+            cp -r susfs4ksu/kernel_patches/include/linux/* $KERNEL_SRC/include/linux/
           fi
 
           # 自动匹配内核补丁
           cd $KERNEL_SRC
-          PATCH_FILE=$(find $GITHUB_WORKSPACE/susfs4kernel/kernel_patches/ -maxdepth 1 -name "50_add_susfs_in_*.patch" | head -n 1)
+          PATCH_FILE=$(find $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/ -maxdepth 1 -name "50_add_susfs_in_*.patch" | head -n 1)
           if [ -n "$PATCH_FILE" ]; then
             echo "⚙️ 正在应用内核 SuSFS 补丁: $(basename "$PATCH_FILE")..."
             patch -p1 --forward < "$PATCH_FILE" || true
@@ -102,7 +103,7 @@ jobs:
           
           # 自动匹配 KernelSU-Next 补丁
           echo "⚙️ 正在应用 KSUN 的 SuSFS 补丁..."
-          KSU_PATCH=$(find $GITHUB_WORKSPACE/susfs4kernel/kernel_patches/ -name "10_enable_susfs_for_ksu.patch" | head -n 1)
+          KSU_PATCH=$(find $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/ -name "10_enable_susfs_for_ksu.patch" | head -n 1)
           if [ -n "$KSU_PATCH" ]; then
             if [ -d "$KERNEL_SRC/KernelSU" ]; then
               cd $KERNEL_SRC/KernelSU
