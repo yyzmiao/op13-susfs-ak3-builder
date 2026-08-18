@@ -1,0 +1,124 @@
+name: Build OnePlus 13 (GKI 6.6) Kernel with KSUN & SuSFS
+
+on:
+  workflow_dispatch:
+    inputs:
+      ksu_branch:
+        description: 'KernelSU-Next 分支或 Tag (默认: next)'
+        required: true
+        default: 'next'
+      susfs_branch:
+        description: 'SuSFS 分支 (默认: gki-android15-6.6)'
+        required: true
+        default: 'gki-android15-6.6'
+      kernel_branch:
+        description: 'AOSP GKI 内核源码分支'
+        required: true
+        default: 'android15-6.6'
+
+jobs:
+  build:
+    name: Build Kernel & Pack AK3
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 1. 释放磁盘空间并安装编译依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison ca-certificates curl flex gcc-aarch64-linux-gnu \
+            git libssl-dev libelf-dev make python3 zip unzip libarchive-tools
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+
+      - name: 2. 下载 AOSP Clang 编译器工具链
+        run: |
+          mkdir -p clang-toolchain
+          cd clang-toolchain
+          # 使用 Google 官方预编译的 Clang (r510928 / r522817 系列)
+          curl -LSs https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r510928.tar.gz | tar -xzf -
+          cd ..
+          echo "$GITHUB_WORKSPACE/clang-toolchain/bin" >> $GITHUB_PATH
+
+      - name: 3. 拉取 Android 15 GKI 6.6 官方内核源码
+        run: |
+          git clone --depth=1 -b ${{ github.event.inputs.kernel_branch }} https://android.googlesource.com/kernel/common kernel-source
+          cd kernel-source
+          echo "KERNEL_SRC=$PWD" >> $GITHUB_ENV
+
+      - name: 4. 集成 KernelSU-Next
+        run: |
+          cd $KERNEL_SRC
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/${{ github.event.inputs.ksu_branch }}/kernel/setup.sh" | bash -s ${{ github.event.inputs.ksu_branch }}
+
+      - name: 5. 集成 SuSFS 补丁
+        run: |
+          cd $GITHUB_WORKSPACE
+          git clone --depth=1 -b ${{ github.event.inputs.susfs_branch }} https://gitlab.com/simonpunk/susfs4kernel.git susfs4kernel || \
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4kernel.git susfs4kernel
+          
+          # 复制 susfs 内核源码文件
+          cp -r susfs4kernel/kernel_patches/fs/* $KERNEL_SRC/fs/
+          cp -r susfs4kernel/kernel_patches/include/linux/* $KERNEL_SRC/include/linux/
+
+          # 应用内核与 KSU 的 SuSFS 补丁
+          cd $KERNEL_SRC
+          patch -p1 --forward < $GITHUB_WORKSPACE/susfs4kernel/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch || true
+          
+          if [ -d "$KERNEL_SRC/KernelSU" ]; then
+            cd $KERNEL_SRC/KernelSU
+            patch -p1 --forward < $GITHUB_WORKSPACE/susfs4kernel/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
+          elif [ -d "$KERNEL_SRC/drivers/kernelsu" ]; then
+            cd $KERNEL_SRC/drivers/kernelsu
+            patch -p1 --forward < $GITHUB_WORKSPACE/susfs4kernel/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
+          fi
+
+      - name: 6. 编译内核 (Image)
+        run: |
+          cd $KERNEL_SRC
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC=clang
+          export LLVM=1
+          export LLVM_IAS=1
+
+          # 启用 GKI 默认配置及 SuSFS 配置
+          make gki_defconfig
+          scripts/config --enable CONFIG_KSU
+          scripts/config --enable CONFIG_KSU_SUSFS
+          scripts/config --enable CONFIG_KSU_SUSFS_SUS_SU
+          scripts/config --enable CONFIG_KSU_SUSFS_SUS_MOUNT
+          scripts/config --enable CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
+          scripts/config --enable CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
+          scripts/config --enable CONFIG_KSU_SUSFS_SUS_KSTAT
+
+          make -j$(nproc --all) Image
+          
+          if [ -f "arch/arm64/boot/Image" ]; then
+            echo "✅ 内核 Image 编译成功！"
+          else
+            echo "❌ 内核编译失败！" && exit 1
+          fi
+
+      - name: 7. 打包 AnyKernel3 (AK3)
+        run: |
+          cd $GITHUB_WORKSPACE
+          git clone https://github.com/osm0sis/AnyKernel3 AnyKernel3
+          cd AnyKernel3
+          
+          # 放入编译出的内核 Image
+          cp $KERNEL_SRC/arch/arm64/boot/Image ./
+          
+          # 配置 anykernel.sh
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+          sed -i 's/block=boot/block=boot/g' anykernel.sh
+          sed -i 's/is_slot_device=0/is_slot_device=auto/g' anykernel.sh
+
+          ZIP_NAME="AK3_OP13_A15_6.6_KSUN_${{ github.event.inputs.ksu_branch }}_SuSFS_$(date +%Y%m%d_%H%M%S).zip"
+          zip -r9 "../$ZIP_NAME" * -x .git README.md *placeholder
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: 8. 上传编译产物 (Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}
