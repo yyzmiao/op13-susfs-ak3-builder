@@ -168,7 +168,8 @@ jobs:
           echo "🎉 刷机包打包完成: $ZIP_NAME"
 
       - name: 8. 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.0
         with:
           name: ${{ env.ZIP_NAME }}
           path: ${{ env.ZIP_NAME }}
+          if-no-files-found: error
