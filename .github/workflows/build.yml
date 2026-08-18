@@ -44,11 +44,8 @@ jobs:
 
       - name: 2. 配置 Google 官方 AOSP Clang 工具链
         run: |
-          mkdir -p clang-toolchain
-          cd clang-toolchain
-          echo "⬇️ 正在下载 Google 官方预编译 Clang (r510928)..."
-          curl -LSs https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r510928.tar.gz | tar -xzf -
-          cd ..
+          echo "⬇️ 正在拉取 Google AOSP 官方 Clang (r510928)..."
+          git clone --depth=1 https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r510928.git clang-toolchain
           echo "$GITHUB_WORKSPACE/clang-toolchain/bin" >> $GITHUB_PATH
 
       - name: 3. 智能确定分支并拉取 GKI 源码
@@ -69,7 +66,7 @@ jobs:
           cd kernel-source
           
           # 读取真实内核子版本号 (例如 6.6.118)
-          RAW_VERSION=$(make kernelversion)
+          RAW_VERSION=$(make kernelversion 2>/dev/null || grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' Makefile | awk '{print $3}' | paste -sd.)
           echo "=========================================="
           echo "✅ 成功拉取内核源码，确切版本为: $RAW_VERSION"
           echo "=========================================="
@@ -103,12 +100,15 @@ jobs:
           
           # 应用 KernelSU-Next 补丁
           echo "⚙️ 正在应用 KSUN 的 SuSFS 补丁..."
-          if [ -d "$KERNEL_SRC/KernelSU" ]; then
-            cd $KERNEL_SRC/KernelSU
-            patch -p1 --forward < $GITHUB_WORKSPACE/susfs4kernel/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
-          elif [ -d "$KERNEL_SRC/drivers/kernelsu" ]; then
-            cd $KERNEL_SRC/drivers/kernelsu
-            patch -p1 --forward < $GITHUB_WORKSPACE/susfs4kernel/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
+          KSU_PATCH=$(find $GITHUB_WORKSPACE/susfs4kernel/kernel_patches/ -name "10_enable_susfs_for_ksu.patch" | head -n 1)
+          if [ -n "$KSU_PATCH" ]; then
+            if [ -d "$KERNEL_SRC/KernelSU" ]; then
+              cd $KERNEL_SRC/KernelSU
+              patch -p1 --forward < "$KSU_PATCH" || true
+            elif [ -d "$KERNEL_SRC/drivers/kernelsu" ]; then
+              cd $KERNEL_SRC/drivers/kernelsu
+              patch -p1 --forward < "$KSU_PATCH" || true
+            fi
           fi
 
       - name: 6. 纯净编译内核 Image (无防格机写保护拦截)
@@ -121,7 +121,6 @@ jobs:
           export LLVM=1
           export LLVM_IAS=1
 
-          # 载入通用配置并开启 KSUN + SuSFS 所有核心隐藏特性
           make gki_defconfig
           scripts/config --enable CONFIG_KSU
           scripts/config --enable CONFIG_KSU_SUSFS
@@ -132,7 +131,7 @@ jobs:
           scripts/config --enable CONFIG_KSU_SUSFS_SUS_KSTAT
 
           echo "🚀 开始多核高速编译 Image..."
-          make -j$(nproc --all) Image
+          make -j$(nproc --all) ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- Image
           
           if [ -f "arch/arm64/boot/Image" ]; then
             echo "=========================================="
@@ -148,10 +147,8 @@ jobs:
           git clone https://github.com/osm0sis/AnyKernel3 AnyKernel3
           cd AnyKernel3
           
-          # 放入编译好的纯净 Image
           cp $KERNEL_SRC/arch/arm64/boot/Image ./
           
-          # AnyKernel3 脚本优化
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's/is_slot_device=0/is_slot_device=auto/g' anykernel.sh
 
