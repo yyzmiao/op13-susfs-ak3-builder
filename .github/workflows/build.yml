@@ -81,11 +81,10 @@ jobs:
           fi
           
           echo "⬇️ 正在拉取 SuSFS 补丁分支: $SUSFS_BR..."
-          # 精确克隆官方 susfs4ksu 源码
           git clone --depth=1 -b "$SUSFS_BR" https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu || \
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
           
-          # 拷贝 SuSFS 核心驱动文件
+          # 拷贝 SuSFS 核心驱动文件到内核源码树
           if [ -d "susfs4ksu/kernel_patches/fs" ]; then
             cp -r susfs4ksu/kernel_patches/fs/* $KERNEL_SRC/fs/
           fi
@@ -93,7 +92,7 @@ jobs:
             cp -r susfs4ksu/kernel_patches/include/linux/* $KERNEL_SRC/include/linux/
           fi
 
-          # 自动匹配内核补丁
+          # 应用内核 SuSFS 补丁
           cd $KERNEL_SRC
           PATCH_FILE=$(find $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/ -maxdepth 1 -name "50_add_susfs_in_*.patch" | head -n 1)
           if [ -n "$PATCH_FILE" ]; then
@@ -101,17 +100,17 @@ jobs:
             patch -p1 --forward < "$PATCH_FILE" || true
           fi
           
-          # 自动匹配 KernelSU-Next 补丁
-          echo "⚙️ 正在应用 KSUN 的 SuSFS 补丁..."
+          # 检查并适配 KSUN 的 SuSFS 补丁
+          echo "⚙️ 检查并适配 KSUN 的 SuSFS 支持..."
           KSU_PATCH=$(find $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/ -name "10_enable_susfs_for_ksu.patch" | head -n 1)
           if [ -n "$KSU_PATCH" ]; then
-            if [ -d "$KERNEL_SRC/KernelSU" ]; then
-              cd $KERNEL_SRC/KernelSU
-              patch -p1 --forward < "$KSU_PATCH" || true
-            elif [ -d "$KERNEL_SRC/drivers/kernelsu" ]; then
-              cd $KERNEL_SRC/drivers/kernelsu
-              patch -p1 --forward < "$KSU_PATCH" || true
-            fi
+            for kdir in KernelSU KernelSU-Next drivers/kernelsu; do
+              if [ -d "$KERNEL_SRC/$kdir" ]; then
+                echo "尝试为 $kdir 应用补丁..."
+                cd "$KERNEL_SRC/$kdir"
+                patch -p1 --forward < "$KSU_PATCH" || true
+              fi
+            done
           fi
 
       - name: 6. 纯净编译通用 GKI Image
@@ -125,6 +124,8 @@ jobs:
           export LLVM_IAS=1
 
           make gki_defconfig
+          # 禁用 Werror（防止警告中断编译），开启 KSU 与 SuSFS 特性
+          scripts/config --disable CONFIG_WERROR
           scripts/config --enable CONFIG_KSU
           scripts/config --enable CONFIG_KSU_SUSFS
           scripts/config --enable CONFIG_KSU_SUSFS_SUS_SU
@@ -134,7 +135,11 @@ jobs:
           scripts/config --enable CONFIG_KSU_SUSFS_SUS_KSTAT
 
           echo "🚀 开始多核高速编译通用 GKI Image..."
-          make -j$(nproc --all) ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- Image
+          # 如果多线程编译遇阻，自动切换单线程精确打印出具体错误行
+          make -j$(nproc --all) ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image || {
+            echo "⚠️ 多线程编译遇阻，正在执行单线程精确捕捉错误详情..."
+            make -j1 ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image
+          }
           
           if [ -f "arch/arm64/boot/Image" ]; then
             echo "=========================================="
