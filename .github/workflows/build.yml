@@ -65,14 +65,14 @@ jobs:
           echo "KERNEL_SRC=$PWD" >> $GITHUB_ENV
           echo "KERNEL_VERSION=$RAW_VERSION" >> $GITHUB_ENV
 
-      - name: 4. 集成 KernelSU-Next
+      - name: 4. 集成 KernelSU-Next (原生自带 SuSFS 接口)
         run: |
           cd $KERNEL_SRC
           KSU_TARGET="${{ github.event.inputs.ksu_branch }}"
           echo "⬇️ 正在集成 KernelSU-Next ($KSU_TARGET)..."
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/${KSU_TARGET}/kernel/setup.sh" | bash -s "$KSU_TARGET"
 
-      - name: 5. 自适应打入 SuSFS 深度隐藏补丁
+      - name: 5. 自适应打入 SuSFS 内核深度隐藏补丁
         run: |
           cd $GITHUB_WORKSPACE
           SUSFS_BR="${{ github.event.inputs.susfs_branch }}"
@@ -99,19 +99,7 @@ jobs:
             echo "⚙️ 正在应用内核 SuSFS 补丁: $(basename "$PATCH_FILE")..."
             patch -p1 --forward < "$PATCH_FILE" || true
           fi
-          
-          # 检查并适配 KSUN 的 SuSFS 补丁
-          echo "⚙️ 检查并适配 KSUN 的 SuSFS 支持..."
-          KSU_PATCH=$(find $GITHUB_WORKSPACE/susfs4ksu/kernel_patches/ -name "10_enable_susfs_for_ksu.patch" | head -n 1)
-          if [ -n "$KSU_PATCH" ]; then
-            for kdir in KernelSU KernelSU-Next drivers/kernelsu; do
-              if [ -d "$KERNEL_SRC/$kdir" ]; then
-                echo "尝试为 $kdir 应用补丁..."
-                cd "$KERNEL_SRC/$kdir"
-                patch -p1 --forward < "$KSU_PATCH" || true
-              fi
-            done
-          fi
+          echo "✅ SuSFS 内核补丁已就绪 (KernelSU-Next 会自动与 SuSFS 联动)"
 
       - name: 6. 纯净编译通用 GKI Image
         run: |
