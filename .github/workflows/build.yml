@@ -123,9 +123,21 @@ jobs:
           export LLVM=1
           export LLVM_IAS=1
 
+          # 修复 OpenSSL 3.x 导致的 extract-cert.c 变量未声明问题
+          sed -i '/#include <openssl\/err.h>/a static const char *key_pass = NULL;' certs/extract-cert.c 2>/dev/null || true
+
           make gki_defconfig
-          # 禁用 Werror（防止警告中断编译），开启 KSU 与 SuSFS 特性
+
+          # 禁用 Werror 与不需要的主机证书签名工具，开启 KSU 与 SuSFS 特性
           scripts/config --disable CONFIG_WERROR
+          scripts/config --disable CONFIG_SYSTEM_TRUSTED_KEYRING
+          scripts/config --disable CONFIG_MODULE_SIG
+          scripts/config --disable CONFIG_MODULE_SIG_ALL
+          scripts/config --disable CONFIG_SYSTEM_TRUSTED_KEYS
+          scripts/config --disable CONFIG_SYSTEM_REVOCATION_KEYS
+          scripts/config --set-str CONFIG_SYSTEM_TRUSTED_KEYS ""
+          scripts/config --set-str CONFIG_SYSTEM_REVOCATION_KEYS ""
+
           scripts/config --enable CONFIG_KSU
           scripts/config --enable CONFIG_KSU_SUSFS
           scripts/config --enable CONFIG_KSU_SUSFS_SUS_SU
@@ -135,7 +147,6 @@ jobs:
           scripts/config --enable CONFIG_KSU_SUSFS_SUS_KSTAT
 
           echo "🚀 开始多核高速编译通用 GKI Image..."
-          # 如果多线程编译遇阻，自动切换单线程精确打印出具体错误行
           make -j$(nproc --all) ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image || {
             echo "⚠️ 多线程编译遇阻，正在执行单线程精确捕捉错误详情..."
             make -j1 ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image
